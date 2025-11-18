@@ -34,6 +34,18 @@ const floorNotFound = (level: number) => ({ message: `Floor ${level} tidak ditem
 const isRoomStatus = (value: unknown): value is RoomStatus =>
   typeof value === 'string' && Object.values(RoomStatus).includes(value as RoomStatus);
 
+async function deleteLocalImage(imageUrl?: string | null) {
+  if (!imageUrl) return;
+  const uploadsPrefix = `${BACKEND_PUBLIC_URL}/uploads/`;
+  if (!imageUrl.startsWith(uploadsPrefix)) {
+    return;
+  }
+
+  const filename = imageUrl.replace(uploadsPrefix, '');
+  const fullPath = path.join(uploadsPath, filename);
+  await fs.unlink(fullPath).catch(() => {});
+}
+
 router.get('/floors', async (_req, res) => {
   const floors = await FloorModel.find().sort({ level: 1 }).lean();
   res.json(floors);
@@ -48,6 +60,77 @@ router.get('/floors/:level', async (req, res) => {
   res.json(floor);
 });
 
+router.post('/floors', upload.single('image'), async (req, res) => {
+  const level = Number(req.body.level);
+  const { name, viewBox } = req.body;
+
+  if (!name || !viewBox || Number.isNaN(level)) {
+    if (req.file) {
+      await fs.unlink(path.join(uploadsPath, req.file.filename)).catch(() => {});
+    }
+    return res.status(400).json({ message: 'Field level, name, dan viewBox wajib diisi.' });
+  }
+
+  const existing = await FloorModel.findOne({ level });
+  if (existing) {
+    if (req.file) {
+      await fs.unlink(path.join(uploadsPath, req.file.filename)).catch(() => {});
+    }
+    return res.status(409).json({ message: `Floor ${level} sudah ada.` });
+  }
+
+  const imageUrl = req.file
+    ? `${BACKEND_PUBLIC_URL}/uploads/${req.file.filename}`
+    : typeof req.body.imageUrl === 'string'
+      ? req.body.imageUrl
+      : '';
+
+  const created = await FloorModel.create({
+    level,
+    name,
+    viewBox,
+    imageUrl,
+    rooms: [],
+  });
+
+  res.status(201).json(created.toObject());
+});
+
+router.put('/floors/:level', async (req, res) => {
+  const level = Number(req.params.level);
+  const { name, viewBox } = req.body as Partial<{ name: string; viewBox: string }>;
+
+  if ((!name && !viewBox) || Number.isNaN(level)) {
+    return res.status(400).json({ message: 'Tidak ada field yang bisa diupdate.' });
+  }
+
+  const floor = await FloorModel.findOne({ level });
+  if (!floor) {
+    return res.status(404).json(floorNotFound(level));
+  }
+
+  if (name) floor.name = name;
+  if (viewBox) floor.viewBox = viewBox;
+  await floor.save();
+
+  res.json(floor.toObject());
+});
+
+router.delete('/floors/:level', async (req, res) => {
+  const level = Number(req.params.level);
+  if (Number.isNaN(level)) {
+    return res.status(400).json({ message: 'Level tidak valid.' });
+  }
+
+  const floor = await FloorModel.findOneAndDelete({ level });
+  if (!floor) {
+    return res.status(404).json(floorNotFound(level));
+  }
+
+  await deleteLocalImage(floor.imageUrl);
+  res.json({ message: `Floor ${level} dihapus.`, level });
+});
+
 router.post('/floors/:level/image', upload.single('image'), async (req, res) => {
   const level = Number(req.params.level);
   if (!req.file) {
@@ -60,9 +143,12 @@ router.post('/floors/:level/image', upload.single('image'), async (req, res) => 
     return res.status(404).json(floorNotFound(level));
   }
 
+  const previousImageUrl = floor.imageUrl;
   const imageUrl = `${BACKEND_PUBLIC_URL}/uploads/${req.file.filename}`;
   floor.imageUrl = imageUrl;
   await floor.save();
+
+  await deleteLocalImage(previousImageUrl);
 
   res.json({ imageUrl });
 });

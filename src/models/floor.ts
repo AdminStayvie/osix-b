@@ -24,7 +24,7 @@ const floorSchema = new Schema<FloorDocument>(
   {
     level: { type: Number, required: true, unique: true },
     name: { type: String, required: true },
-    imageUrl: { type: String, required: true },
+    imageUrl: { type: String, required: false, default: '' },
     viewBox: { type: String, required: true },
     rooms: { type: [roomSchema], default: [] },
   },
