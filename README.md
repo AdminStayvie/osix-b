@@ -1,39 +1,45 @@
-# StayVie Backend (Osix)
+# StayVie Backend (PostgreSQL)
 
-This Express/TypeScript backend powers the Osix floor/room management UI by persisting floor layouts inside MongoDB and exposing the `/api` routes that the Vite frontend consumes.
+Express + TypeScript backend that persists outlets, floors, and rooms in PostgreSQL and exposes `/api` routes for the Stayvie backoffice UI.
 
 ## Setup
 1. `cd Backend`
 2. `npm install`
-3. Copy `.env.example` to `.env` and fill in the values. For Osix you can reuse the credentials provided earlier:
-   - `DB_NAME=RoomDB`
-   - `JWT_SECRET=kunci-rahasia-anda-yang-sangat-aman`
-   - `MONGO_URI=mongodb://root:Efz4AcPZEa32Ai8tg9ejLKOWpXcd7Qgmk3tjAurB5lUqqOS4Xcs6FLZXqSXfmvNy@148.230.97.197:5432/RoomDB?authSource=admin&directConnection=true`
-4. `npm run dev` to start the server with hot reload.
+3. Configure `.env` (sample values already filled):
+   - `DATABASE_URL=postgres://...` (public Stayvie URL already included)
+   - `JWT_SECRET=your-secret`
+   - `BACKEND_PUBLIC_URL=http://localhost:4000`
+   - `UPLOADS_DIR=uploads`
+   - `DEFAULT_OUTLET_SLUG=bhaskara-osix`
+   - `COMPANY_NAME=Stayvie Co-Living`
+4. `npm run dev` for hot reload or `npm run build && npm start` for production.
 
-## Available routes (prefixed by `/api`)
-- `GET /floors` – list all floors.
-- `GET /floors/:level` – fetch a single floor layout.
-- `POST /floors/:level/rooms` – add a room to the floor.
-- `PUT /rooms/:id` – update a room's metadata.
-- `PATCH /rooms/bulk-status` – change the status for multiple rooms.
-- `DELETE /rooms/:id` – remove a room.
+On boot the server:
+- Ensures PostgreSQL tables exist (outlets, floors, rooms)
+- Seeds the Bhaskara Osix outlet + floors/rooms if missing
+- Serves static uploads from `/uploads`
 
-## Notes
-- The first server boot seeds the Osix layout (levels 1-4) if the database is empty.
-- The `JWT_SECRET` is available for future auth needs (reported by `/`).
-- Once running, point the Osix frontend to `http://localhost:4000/api`.
-- Uploaded floor plan images are served from the `/uploads` static path and their URLs are persisted on each floor document (so Mongo knows what file a floor is using).
+## Key routes (prefixed with `/api`)
+- `GET /outlets` — list outlets
+- `POST /outlets` — create outlet
+- `PUT /outlets/:outletSlug` — update outlet name/company
+- `GET /outlets/:outletSlug/floors` — list floors + rooms for an outlet
+- `POST /outlets/:outletSlug/floors` — create floor (JSON or multipart)
+- `PUT /outlets/:outletSlug/floors/:level` — update floor meta
+- `DELETE /outlets/:outletSlug/floors/:level` — delete floor + rooms
+- `POST /outlets/:outletSlug/floors/:level/image` — upload/replace floor image
+- `POST /outlets/:outletSlug/floors/:level/rooms` — add room
+- `PUT /outlets/:outletSlug/rooms/:id` — update room (rename/move/status/etc)
+- `PATCH /outlets/:outletSlug/rooms/bulk-status` — bulk status change
+- `DELETE /outlets/:outletSlug/rooms/:id` — delete room
 
-## Uploading a new floor plan image
+Legacy aliases (`/floors`, `/rooms/...`) still hit the default outlet for backward compatibility.
 
-1. Start the backend so `/uploads` is exposed and `BACKEND_PUBLIC_URL` reflects the running host (defaults to `http://localhost:4000`).
-2. Upload a file via multipart form data (default limit 20 MB, configurable with `UPLOAD_MAX_SIZE_BYTES`):
-
+## Uploading a floor plan image
 ```
-curl -X POST 'http://localhost:4000/api/floors/1/image' \
-  -F 'image=@/path/to/osix-floor1.png' \
+curl -X POST 'http://localhost:4000/api/outlets/bhaskara-osix/floors/1/image' \
+  -F 'image=@/path/to/floor.png' \
   -H 'Content-Type: multipart/form-data'
 ```
 
-3. The response returns `imageUrl`, which is written into the matching floor entry so the frontend can reference the new design.
+The response returns `imageUrl`, which is stored in PostgreSQL and served via `/uploads`.

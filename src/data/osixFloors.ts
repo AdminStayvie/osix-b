@@ -1,6 +1,24 @@
-import { Floor, RoomStatus } from '../types';
+import { RoomStatus } from '../types';
 
-export const osixFloorSeed: Floor[] = [
+export interface SeedRoom {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  status: RoomStatus;
+  tenantName?: string;
+}
+
+export interface SeedFloor {
+  level: number;
+  name: string;
+  imageUrl: string;
+  viewBox: string;
+  rooms: SeedRoom[];
+}
+
+export const osixFloorSeed: SeedFloor[] = [
   {
     level: 1,
     name: "Floor 1",

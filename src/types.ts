@@ -5,6 +5,8 @@ export enum RoomStatus {
 
 export interface Room {
   id: string;
+  outletId: number;
+  floorId: number;
   x: number;
   y: number;
   width: number;
@@ -14,9 +16,19 @@ export interface Room {
 }
 
 export interface Floor {
+  id: number;
+  outletId: number;
+  outletSlug: string;
   level: number;
   name: string;
   imageUrl: string;
   viewBox: string;
   rooms: Room[];
+}
+
+export interface Outlet {
+  id: number;
+  slug: string;
+  name: string;
+  companyName: string;
 }
