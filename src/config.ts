@@ -28,3 +28,7 @@ export const POSTGRES_SSL =
 export const DEFAULT_OUTLET_SLUG = process.env.DEFAULT_OUTLET_SLUG ?? 'bhaskara-osix';
 export const DEFAULT_COMPANY_NAME = process.env.COMPANY_NAME ?? 'Stayvie Co-Living';
 export const JWT_SECRET = process.env.JWT_SECRET!;
+
+export const SEED_ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@stayvie.test';
+export const SEED_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'admin123';
+export const SEED_ADMIN_NAME = process.env.ADMIN_NAME ?? 'Stayvie Admin';

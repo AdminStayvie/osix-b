@@ -32,3 +32,10 @@ export interface Outlet {
   name: string;
   companyName: string;
 }
+
+export interface User {
+  id: number;
+  email: string;
+  fullName: string;
+  role: 'admin' | 'editor';
+}

@@ -1,4 +1,5 @@
-import { DEFAULT_COMPANY_NAME, DEFAULT_OUTLET_SLUG } from './config';
+import bcrypt from 'bcryptjs';
+import { DEFAULT_COMPANY_NAME, DEFAULT_OUTLET_SLUG, SEED_ADMIN_EMAIL, SEED_ADMIN_NAME, SEED_ADMIN_PASSWORD } from './config';
 import { osixFloorSeed } from './data/osixFloors';
 import { query } from './db';
 
@@ -57,5 +58,17 @@ export async function ensureSeeded(): Promise<void> {
         [outletId, floorId, room.id, room.x, room.y, room.width, room.height, room.status, room.tenantName ?? null]
       );
     }
+  }
+
+  const existingAdmin = await query<{ id: number }>('SELECT id FROM users WHERE email = $1', [SEED_ADMIN_EMAIL]);
+  if (!existingAdmin[0]) {
+    const passwordHash = await bcrypt.hash(SEED_ADMIN_PASSWORD, 10);
+    await query(
+      `INSERT INTO users (email, full_name, password_hash, role)
+       VALUES ($1, $2, $3, 'admin')
+       ON CONFLICT (email) DO NOTHING`,
+      [SEED_ADMIN_EMAIL, SEED_ADMIN_NAME, passwordHash]
+    );
+    console.log(`? Admin default dibuat: ${SEED_ADMIN_EMAIL}`);
   }
 }

@@ -1,9 +1,11 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { BACKEND_PUBLIC_URL, DEFAULT_COMPANY_NAME, DEFAULT_OUTLET_SLUG, UPLOAD_MAX_SIZE_BYTES } from './config';
-import { Floor, Outlet, Room, RoomStatus } from './types';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import { BACKEND_PUBLIC_URL, DEFAULT_COMPANY_NAME, DEFAULT_OUTLET_SLUG, JWT_SECRET, UPLOAD_MAX_SIZE_BYTES } from './config';
+import { Floor, Outlet, Room, RoomStatus, type User } from './types';
 import { uploadsPath } from './uploads';
 import { query } from './db';
 
@@ -51,6 +53,9 @@ type RoomRow = {
   status: RoomStatus;
   tenant_name: string | null;
 };
+type UserRow = { id: number; email: string; full_name: string; password_hash: string; role: 'admin' | 'editor' };
+
+type AuthenticatedRequest = Request & { user?: User };
 
 const outletNotFound = (slug: string) => ({ message: `Outlet ${slug} tidak ditemukan.` });
 const floorNotFound = (level: number, outletSlug: string) => ({
@@ -148,12 +153,84 @@ function mapFloor(row: FloorRow, outletSlug: string, rooms: Room[] = []): Floor 
   };
 }
 
+function mapUser(row: UserRow): User {
+  return {
+    id: row.id,
+    email: row.email,
+    fullName: row.full_name,
+    role: row.role,
+  };
+}
+
 async function fetchOutlet(slug: string): Promise<OutletRow | null> {
   const outlet = await query<OutletRow>('SELECT id, slug, name, company_name FROM outlets WHERE slug = $1', [
     slug,
   ]);
   return outlet[0] ?? null;
 }
+
+async function fetchUserByEmail(email: string): Promise<UserRow | null> {
+  const users = await query<UserRow>(
+    'SELECT id, email, full_name, password_hash, role FROM users WHERE email = $1',
+    [email]
+  );
+  return users[0] ?? null;
+}
+
+async function fetchUserById(id: number): Promise<UserRow | null> {
+  const users = await query<UserRow>(
+    'SELECT id, email, full_name, password_hash, role FROM users WHERE id = $1',
+    [id]
+  );
+  return users[0] ?? null;
+}
+
+const createToken = (user: UserRow) =>
+  jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.full_name,
+    },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+
+const requireAuth = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  const header = req.headers.authorization;
+  const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
+
+  if (!token) {
+    return res.status(401).json({ message: 'Login diperlukan untuk mengakses resource ini.' });
+  }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as { sub?: number };
+    const userId = typeof payload.sub === 'number' ? payload.sub : Number(payload.sub);
+    if (!userId) {
+      return res.status(401).json({ message: 'Token tidak valid.' });
+    }
+
+    const user = await fetchUserById(userId);
+    if (!user) {
+      return res.status(401).json({ message: 'Sesi tidak ditemukan. Silakan login ulang.' });
+    }
+
+    req.user = mapUser(user);
+    next();
+  } catch (error) {
+    console.error('Token verification failed', error);
+    return res.status(401).json({ message: 'Token tidak valid atau kedaluwarsa.' });
+  }
+};
+
+const requireAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ message: 'Hanya admin yang dapat melakukan aksi ini.' });
+  }
+  next();
+};
 
 async function fetchFloorsWithRooms(outlet: OutletRow): Promise<Floor[]> {
   const floorRows = await query<FloorRow>(
@@ -197,6 +274,90 @@ async function fetchFloorWithRooms(outlet: OutletRow, level: number): Promise<Fl
   const rooms = roomRows.map(mapRoom);
   return mapFloor(floorRow, outlet.slug, rooms);
 }
+
+const loginHandler = async (req: Request, res: Response) => {
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email dan password wajib diisi.' });
+  }
+
+  const user = await fetchUserByEmail(email);
+  if (!user) {
+    return res.status(401).json({ message: 'Email atau password salah.' });
+  }
+
+  const isValid = await bcrypt.compare(password, user.password_hash);
+  if (!isValid) {
+    return res.status(401).json({ message: 'Email atau password salah.' });
+  }
+
+  const token = createToken(user);
+  res.json({ token, user: mapUser(user) });
+};
+
+const meHandler = (req: AuthenticatedRequest, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ message: 'Tidak ada sesi aktif.' });
+  }
+  res.json({ user: req.user });
+};
+
+const listUsersHandler = async (_req: AuthenticatedRequest, res: Response) => {
+  const users = await query<UserRow>('SELECT id, email, full_name, role FROM users ORDER BY created_at DESC');
+  res.json(users.map(mapUser));
+};
+
+const createUserHandler = async (req: AuthenticatedRequest, res: Response) => {
+  const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const fullName = typeof req.body.fullName === 'string' ? req.body.fullName.trim() : '';
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  const role = req.body.role === 'admin' ? 'admin' : 'editor';
+
+  if (!email || !fullName || password.length < 6) {
+    return res
+      .status(400)
+      .json({ message: 'Nama, email, dan password (min 6 karakter) wajib diisi.' });
+  }
+
+  const existing = await fetchUserByEmail(email);
+  if (existing) {
+    return res.status(409).json({ message: 'Email sudah terdaftar.' });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const created = await query<UserRow>(
+    `INSERT INTO users (email, full_name, password_hash, role)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, email, full_name, password_hash, role`,
+    [email, fullName, passwordHash, role]
+  );
+
+  res.status(201).json(mapUser(created[0]));
+};
+
+const deleteUserHandler = async (req: AuthenticatedRequest, res: Response) => {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) {
+    return res.status(400).json({ message: 'ID user tidak valid.' });
+  }
+
+  if (req.user?.id === id) {
+    return res.status(400).json({ message: 'Tidak bisa menghapus akun yang sedang login.' });
+  }
+
+  const deleted = await query<UserRow>(
+    'DELETE FROM users WHERE id = $1 RETURNING id, email, full_name, role',
+    [id]
+  );
+
+  if (!deleted[0]) {
+    return res.status(404).json({ message: 'User tidak ditemukan.' });
+  }
+
+  res.json({ user: mapUser(deleted[0]) });
+};
 
 const listOutletsHandler = async (_req: Request, res: Response) => {
   const outlets = await query<OutletRow>('SELECT id, slug, name, company_name FROM outlets ORDER BY name ASC');
@@ -251,6 +412,24 @@ const updateOutletHandler = async (req: Request, res: Response) => {
   );
 
   res.json(mapOutlet(updated[0]));
+};
+
+const deleteOutletHandler = async (req: Request, res: Response) => {
+  const outletSlug = req.params.outletSlug ?? DEFAULT_OUTLET_SLUG;
+  const outlet = await fetchOutlet(outletSlug);
+  if (!outlet) {
+    return res.status(404).json(outletNotFound(outletSlug));
+  }
+
+  const floors = await query<FloorRow>(
+    'SELECT id, outlet_id, level, name, image_url, view_box FROM floors WHERE outlet_id = $1',
+    [outlet.id]
+  );
+
+  await query('DELETE FROM outlets WHERE id = $1', [outlet.id]);
+  await Promise.all(floors.map(floor => deleteLocalImage(floor.image_url)));
+
+  res.json({ message: `Outlet ${outlet.name} dihapus.`, slug: outlet.slug });
 };
 
 const listFloorsHandler = async (req: Request, res: Response) => {
@@ -610,36 +789,42 @@ const deleteRoomHandler = async (req: Request, res: Response) => {
   res.json(mapRoom(deleted[0]));
 };
 
-router.get('/outlets', listOutletsHandler);
-router.post('/outlets', createOutletHandler);
-router.put('/outlets/:outletSlug', updateOutletHandler);
+router.post('/auth/login', loginHandler);
 
+// Public read-only endpoints
+router.get('/outlets', listOutletsHandler);
 router.get('/outlets/:outletSlug/floors', listFloorsHandler);
 router.get('/floors', listFloorsHandler);
-
 router.get('/outlets/:outletSlug/floors/:level', getFloorHandler);
 router.get('/floors/:level', getFloorHandler);
 
-router.post('/outlets/:outletSlug/floors', upload.single('image'), createFloorHandler);
+// Protected endpoints
+router.use(requireAuth);
 
+router.get('/auth/me', meHandler);
+
+router.get('/users', requireAdmin, listUsersHandler);
+router.post('/users', requireAdmin, createUserHandler);
+router.delete('/users/:id', requireAdmin, deleteUserHandler);
+
+router.post('/outlets', requireAdmin, createOutletHandler);
+router.put('/outlets/:outletSlug', updateOutletHandler);
+router.delete('/outlets/:outletSlug', requireAdmin, deleteOutletHandler);
+
+router.post('/outlets/:outletSlug/floors', upload.single('image'), createFloorHandler);
 router.put('/outlets/:outletSlug/floors/:level', updateFloorHandler);
 router.put('/floors/:level', updateFloorHandler);
-
 router.delete('/outlets/:outletSlug/floors/:level', deleteFloorHandler);
 router.delete('/floors/:level', deleteFloorHandler);
-
 router.post('/outlets/:outletSlug/floors/:level/image', upload.single('image'), updateFloorImageHandler);
 router.post('/floors/:level/image', upload.single('image'), updateFloorImageHandler);
 
 router.post('/outlets/:outletSlug/floors/:level/rooms', createRoomHandler);
 router.post('/floors/:level/rooms', createRoomHandler);
-
 router.put('/outlets/:outletSlug/rooms/:id', updateRoomHandler);
 router.put('/rooms/:id', updateRoomHandler);
-
 router.patch('/outlets/:outletSlug/rooms/bulk-status', bulkRoomStatusHandler);
 router.patch('/rooms/bulk-status', bulkRoomStatusHandler);
-
 router.delete('/outlets/:outletSlug/rooms/:id', deleteRoomHandler);
 router.delete('/rooms/:id', deleteRoomHandler);
 

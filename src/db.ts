@@ -31,6 +31,17 @@ export async function migrate(): Promise<void> {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      full_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'editor',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT user_role_valid CHECK (role IN ('admin', 'editor'))
+    );
+
     CREATE TABLE IF NOT EXISTS floors (
       id SERIAL PRIMARY KEY,
       outlet_id INTEGER NOT NULL REFERENCES outlets(id) ON DELETE CASCADE,
@@ -64,6 +75,7 @@ export async function migrate(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_floors_outlet_level ON floors (outlet_id, level);
     CREATE INDEX IF NOT EXISTS idx_rooms_outlet_code ON rooms (outlet_id, room_code);
     CREATE INDEX IF NOT EXISTS idx_rooms_floor ON rooms (floor_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (email);
   `);
 }
 
